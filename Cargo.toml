@@ -1,0 +1,28 @@
+
+[package]
+authors     = ["Laride <node@laride.dev>"]
+description = "Convert common static images to/from LVGL v9 image data, with native Node.js and browser support"
+edition     = "2021"
+license     = "MIT"
+name        = "img2lv"
+version     = "0.1.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+base64      = "0.22"
+exoquant    = "0.2"
+image       = { version = "0.25", default-features = true }
+lz4_flex    = "0.13"
+napi        = "3.0.0"
+napi-derive = "3.0.0"
+regex       = "1.10"
+thiserror   = "2.0"
+
+[build-dependencies]
+napi-build = "2"
+
+[profile.release]
+lto   = true
+strip = "symbols"
