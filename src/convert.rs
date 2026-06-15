@@ -782,7 +782,7 @@ fn rgba_to_indexed(rgba: &RgbaImage, cf: ColorFormat, nema_gfx: bool) -> Result<
     data.extend_from_slice(&[*b, *g, *r, *a]);
   }
 
-  let indexes_u8: Vec<u8> = indexes.iter().map(|&i| i as u8).collect();
+  let indexes_u8: Vec<u8> = indexes.to_vec();
 
   if cf == ColorFormat::I8 {
     if nema_gfx {
@@ -1040,7 +1040,7 @@ fn auto_indexed_cf(rgba: &RgbaImage) -> ColorFormat {
 }
 
 fn default_stride(cf: ColorFormat, w: usize) -> usize {
-  (w * cf.bpp() + 7) / 8
+  (w * cf.bpp()).div_ceil(8)
 }
 
 fn data_len(cf: ColorFormat, w: usize, h: usize, stride: usize) -> usize {
@@ -1071,7 +1071,7 @@ fn change_stride(data: &[u8], h: usize, old_stride: usize, new_stride: usize, ou
 }
 
 fn packed_len(count: usize, bpp: usize) -> usize {
-  (count * bpp + 7) / 8
+  (count * bpp).div_ceil(8)
 }
 
 fn pack_indices(values: &[u8], bpp: usize, w: usize, out: &mut Vec<u8>) {

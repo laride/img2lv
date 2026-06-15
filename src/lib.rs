@@ -29,6 +29,7 @@ pub fn image_to_bin(
 }
 
 #[napi]
+#[allow(clippy::too_many_arguments)]
 pub fn image_to_c(
   input: Buffer,
   input_name: String,
