@@ -8,8 +8,8 @@ env:
   push:
     branches:
       - main
-    tags-ignore:
-      - '**'
+    tags:
+      - 'v*'
     paths-ignore:
       - '**/*.md'
       - LICENSE
@@ -26,6 +26,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - name: Setup node
         uses: actions/setup-node@v6
         with:
@@ -133,8 +135,7 @@ jobs:
     name: Build FreeBSD
     steps:
       - uses: actions/checkout@v6
-      - name: Build
-        id: build
+      - name: Start FreeBSD VM
         uses: cross-platform-actions/action@v1.1.0
         env:
           DEBUG: napi:*
@@ -146,28 +147,30 @@ jobs:
           cpu_count: 3
           environment_variables: DEBUG RUSTUP_IO_THREADS
           shell: bash
-          run: |
-            sudo pkg install -y -f curl node libnghttp2 npm cmake
-            sudo npm install -g yarn --ignore-scripts
-            curl https://sh.rustup.rs -sSf --output rustup.sh
-            sh rustup.sh -y --profile minimal --default-toolchain stable
-            source "$HOME/.cargo/env"
-            echo "~~~~ rustc --version ~~~~"
-            rustc --version
-            echo "~~~~ node -v ~~~~"
-            node -v
-            echo "~~~~ yarn --version ~~~~"
-            yarn --version
-            pwd
-            ls -lah
-            whoami
-            env
-            freebsd-version
-            yarn install
-            yarn build
-            rm -rf node_modules
-            rm -rf target
-            rm -rf .yarn/cache
+      - name: Build
+        run: |
+          sudo pkg install -y -f curl node libnghttp2 npm cmake
+          sudo npm install -g yarn --ignore-scripts
+          curl https://sh.rustup.rs -sSf --output rustup.sh
+          sh rustup.sh -y --profile minimal --default-toolchain stable
+          source "$HOME/.cargo/env"
+          echo "~~~~ rustc --version ~~~~"
+          rustc --version
+          echo "~~~~ node -v ~~~~"
+          node -v
+          echo "~~~~ yarn --version ~~~~"
+          yarn --version
+          pwd
+          ls -lah
+          whoami
+          env
+          freebsd-version
+          yarn install
+          yarn build
+          rm -rf node_modules
+          rm -rf target
+          rm -rf .yarn/cache
+        shell: cpa.sh {0}
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
@@ -321,6 +324,7 @@ jobs:
   publish:
     name: Publish
     runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
     permissions:
       contents: write
       id-token: write
@@ -352,17 +356,27 @@ jobs:
         shell: bash
       - name: Publish
         run: |
+          TAG_NAME="${GITHUB_REF_NAME}"
+          SEMVER_TAG_REGEX='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+
+          if [[ ! "$TAG_NAME" =~ $SEMVER_TAG_REGEX ]]; then
+            echo "Tag $TAG_NAME is not a valid release tag. Expected vX.Y.Z with optional semver suffix."
+            exit 1
+          fi
+
+          git fetch origin main --force
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/main"; then
+            echo "Tag $TAG_NAME must point to a commit on main."
+            exit 1
+          fi
+
           npm config set provenance true
-          if git log -1 --pretty=%B | grep "^[0-9]\+\.[0-9]\+\.[0-9]\+$";
-          then
-            echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
-            npm publish --access public
-          elif git log -1 --pretty=%B | grep "^[0-9]\+\.[0-9]\+\.[0-9]\+";
-          then
-            echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
+
+          echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
+          if [[ "$TAG_NAME" == *-* ]]; then
             npm publish --tag next --access public
           else
-            echo "Not a release, skipping publish"
+            npm publish --access public
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
