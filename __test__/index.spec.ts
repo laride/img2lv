@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { imageToBin, imageToC, lvglToPng, lvglToRgba, lvglWidth, lvglHeight } from '../index'
+import { imageToBin, imageToC, lvglToPng, lvglToRgba, lvglWidth, lvglHeight, ColorFormat } from '../index'
 
 const IMG_DIR = join(dirname(fileURLToPath(import.meta.url)), 'images')
 const isWasiBinding = process.env.NAPI_RS_FORCE_WASI != null || (process.arch as string) === 'wasm32'
@@ -56,7 +56,7 @@ function normalizeTransparentRgba(data: Buffer): number[] {
 
 test('imageToBin produces valid LVGL binary header', (t) => {
   const png = loadTestImage('simon-twukN12EN7c-unsplash-small.png')
-  const bin = imageToBin(png, 'ARGB8888', 0, 1, false, 'NONE')
+  const bin = imageToBin(png, { cf: 'ARGB8888' })
   t.is(bin[0], 0x19, 'magic byte should be 0x19')
   t.is(bin[1], 0x10, 'cf byte should be ARGB8888 (0x10)')
   t.true(bin.length > 12, 'output should contain header + data')
@@ -64,21 +64,22 @@ test('imageToBin produces valid LVGL binary header', (t) => {
 
 test('imageToBin with RGB565 format', (t) => {
   const jpg = loadTestImage('kalen-emsley-Bkci_8qcdvQ-unsplash-small.jpg')
-  const bin = imageToBin(jpg, 'RGB565', 0, 1, false, 'NONE')
+  const bin = imageToBin(jpg, { cf: 'RGB565' })
   t.is(bin[0], 0x19)
   t.is(bin[1], 0x12, 'cf byte should be RGB565 (0x12)')
 })
 
 test('imageToBin with indexed I8 format', (t) => {
   const png = loadTestImage('simon-twukN12EN7c-unsplash-small.png')
-  const bin = imageToBin(png, 'I8', 0, 1, false, 'NONE')
+  const bin = imageToBin(png, { cf: 'I8' })
   t.is(bin[0], 0x19)
   t.is(bin[1], 0x0a, 'cf byte should be I8 (0x0A)')
 })
 
+// Enum-member style also works and may aid readability for special request modes
 test('imageToBin with AUTO format selects indexed', (t) => {
   const png = loadTestImage('simon-twukN12EN7c-unsplash-small.png')
-  const bin = imageToBin(png, 'AUTO', 0, 1, false, 'NONE')
+  const bin = imageToBin(png, { cf: ColorFormat.AUTO })
   t.is(bin[0], 0x19)
   const cf = bin[1] & 0x1f
   t.true([0x07, 0x08, 0x09, 0x0a].includes(cf), `cf should be indexed format, got 0x${cf.toString(16)}`)
@@ -86,22 +87,22 @@ test('imageToBin with AUTO format selects indexed', (t) => {
 
 test('imageToBin with LZ4 compression', (t) => {
   const png = loadTestImage('simon-twukN12EN7c-unsplash-small.png')
-  const bin = imageToBin(png, 'ARGB8888', 0, 1, false, 'LZ4')
+  const bin = imageToBin(png, { cf: 'ARGB8888', compress: 'LZ4' })
   t.is(bin[0], 0x19)
   t.truthy(bin[2] & 0x08, 'compressed flag should be set')
 })
 
 test('imageToBin with RLE compression', (t) => {
   const png = loadTestImage('simon-twukN12EN7c-unsplash-small.png')
-  const bin = imageToBin(png, 'ARGB8888', 0, 1, false, 'RLE')
+  const bin = imageToBin(png, { cf: 'ARGB8888', compress: 'RLE' })
   t.is(bin[0], 0x19)
   t.truthy(bin[2] & 0x08, 'compressed flag should be set')
 })
 
 test('roundtrip: bin -> png', (t) => {
   const original = loadTestImage('kalen-emsley-Bkci_8qcdvQ-unsplash-small.jpg')
-  const bin = imageToBin(original, 'ARGB8888', 0, 1, false, 'NONE')
-  const pngOut = lvglToPng(bin, false)
+  const bin = imageToBin(original, { cf: 'ARGB8888' })
+  const pngOut = lvglToPng(bin)
   t.true(pngOut.length > 0, 'output PNG should not be empty')
   t.is(pngOut[0], 0x89, 'output should start with PNG magic')
   t.is(pngOut[1], 0x50, 'P')
@@ -111,36 +112,36 @@ test('roundtrip: bin -> png', (t) => {
 
 test('roundtrip: bin -> rgba', (t) => {
   const original = loadTestImage('simon-twukN12EN7c-unsplash-small.png')
-  const bin = imageToBin(original, 'ARGB8888', 0, 1, false, 'NONE')
-  const w = lvglWidth(bin, false)
-  const h = lvglHeight(bin, false)
+  const bin = imageToBin(original, { cf: 'ARGB8888' })
+  const w = lvglWidth(bin)
+  const h = lvglHeight(bin)
   t.true(w > 0)
   t.true(h > 0)
-  const rgba = lvglToRgba(bin, false)
+  const rgba = lvglToRgba(bin)
   t.is(rgba.length, w * h * 4, 'RGBA data should have 4 bytes per pixel')
 })
 
 test('roundtrip: compressed bin -> png', (t) => {
   const original = loadTestImage('lucas-calloch-P-yzuyWFEIk-unsplash-small.webp')
   for (const compress of ['RLE', 'LZ4'] as const) {
-    const bin = imageToBin(original, 'ARGB8888', 0, 1, false, compress)
-    const pngOut = lvglToPng(bin, false)
+    const bin = imageToBin(original, { cf: 'ARGB8888', compress })
+    const pngOut = lvglToPng(bin)
     t.true(pngOut.length > 0, `${compress} roundtrip should produce PNG`)
   }
 })
 
 test('lvglWidth and lvglHeight return correct dimensions', (t) => {
   const original = loadTestImage('simon-twukN12EN7c-unsplash-small.png')
-  const bin = imageToBin(original, 'ARGB8888', 0, 1, false, 'NONE')
-  const w = lvglWidth(bin, false)
-  const h = lvglHeight(bin, false)
+  const bin = imageToBin(original, { cf: 'ARGB8888' })
+  const w = lvglWidth(bin)
+  const h = lvglHeight(bin)
   t.true(w > 0 && w < 10000)
   t.true(h > 0 && h < 10000)
 })
 
 test('imageToC produces valid C source', (t) => {
   const png = loadTestImage('simon-twukN12EN7c-unsplash-small.png')
-  const cSource = imageToC(png, 'test.png', null, 'ARGB8888', 0, 1, false, 'NONE')
+  const cSource = imageToC(png, 'test.png', null, { cf: 'ARGB8888' })
   t.true(cSource.includes('LV_COLOR_FORMAT_ARGB8888'))
   t.true(cSource.includes('lv_image_dsc_t'))
   t.true(cSource.includes('_map[]'))
@@ -148,25 +149,25 @@ test('imageToC produces valid C source', (t) => {
 
 test('imageToC with custom output name', (t) => {
   const png = loadTestImage('simon-twukN12EN7c-unsplash-small.png')
-  const cSource = imageToC(png, 'test.png', 'my_icon', 'RGB565', 0, 1, false, 'NONE')
+  const cSource = imageToC(png, 'test.png', 'my_icon', { cf: 'RGB565' })
   t.true(cSource.includes('my_icon_map[]'))
   t.true(cSource.includes('lv_image_dsc_t my_icon'))
 })
 
 cArrayDecodeTest('C array roundtrip exposes correct dimensions', (t) => {
   const png = loadTestImage('simon-twukN12EN7c-unsplash-small.png')
-  const bin = imageToBin(png, 'ARGB8888', 0, 1, false, 'NONE')
-  const cSource = imageToC(png, 'test.png', null, 'ARGB8888', 0, 1, false, 'NONE')
+  const bin = imageToBin(png, { cf: 'ARGB8888' })
+  const cSource = imageToC(png, 'test.png', null, { cf: 'ARGB8888' })
   const cBuffer = Buffer.from(cSource, 'utf8')
 
-  t.is(lvglWidth(cBuffer, true), lvglWidth(bin, false))
-  t.is(lvglHeight(cBuffer, true), lvglHeight(bin, false))
+  t.is(lvglWidth(cBuffer, { isCArray: true }), lvglWidth(bin))
+  t.is(lvglHeight(cBuffer, { isCArray: true }), lvglHeight(bin))
 })
 
 cArrayDecodeTest('C array roundtrip decodes to PNG', (t) => {
   const png = loadTestImage('simon-twukN12EN7c-unsplash-small.png')
-  const cSource = imageToC(png, 'test.png', null, 'RGB565', 0, 1, false, 'NONE')
-  const pngOut = lvglToPng(Buffer.from(cSource, 'utf8'), true)
+  const cSource = imageToC(png, 'test.png', null, { cf: 'RGB565' })
+  const pngOut = lvglToPng(Buffer.from(cSource, 'utf8'), { isCArray: true })
 
   t.true(pngOut.length > 0, 'output PNG should not be empty')
   t.is(pngOut[0], 0x89, 'output should start with PNG magic')
@@ -177,31 +178,31 @@ cArrayDecodeTest('C array roundtrip decodes to PNG', (t) => {
 
 cArrayDecodeTest('compressed C array decodes to RGBA like the binary path', (t) => {
   const original = loadTestImage('lucas-calloch-P-yzuyWFEIk-unsplash-small.webp')
-  const bin = imageToBin(original, 'ARGB8888', 0, 1, false, 'LZ4')
-  const cSource = imageToC(original, 'test.webp', null, 'ARGB8888', 0, 1, false, 'LZ4')
+  const bin = imageToBin(original, { cf: 'ARGB8888', compress: 'LZ4' })
+  const cSource = imageToC(original, 'test.webp', null, { cf: 'ARGB8888', compress: 'LZ4' })
 
-  const rgbaFromBin = lvglToRgba(bin, false)
-  const rgbaFromC = lvglToRgba(Buffer.from(cSource, 'utf8'), true)
+  const rgbaFromBin = lvglToRgba(bin)
+  const rgbaFromC = lvglToRgba(Buffer.from(cSource, 'utf8'), { isCArray: true })
 
   t.deepEqual([...rgbaFromC], [...rgbaFromBin], 'C array and binary decode should match')
 })
 
 test('imageToBin with premultiply', (t) => {
   const png = loadTestImage('simon-twukN12EN7c-unsplash-small.png')
-  const bin = imageToBin(png, 'ARGB8888', 0, 1, true, 'NONE')
+  const bin = imageToBin(png, { cf: 'ARGB8888', premultiply: true })
   t.is(bin[0], 0x19)
   t.truthy(bin[2] & 0x01, 'premultiplied flag should be set')
 })
 
 test('imageToBin rejects premultiply for unsupported formats before conversion', (t) => {
   const png = loadTestImage('simon-twukN12EN7c-unsplash-small.png')
-  const error = t.throws(() => imageToBin(png, 'XRGB8888', 0, 1, true, 'NONE'))
+  const error = t.throws(() => imageToBin(png, { cf: 'XRGB8888', premultiply: true }))
   t.regex(error.message, /premultiply not supported for XRGB8888/i)
 })
 
 test('indexed PNG fast path preserves palette and indices when capacity allows', (t) => {
   const png = loadTestImage('fixture-indexed-trns-preserve.png')
-  const bin = imageToBin(png, 'I2', 0, 1, false, 'NONE')
+  const bin = imageToBin(png, { cf: 'I2' })
   const { cf, width, height, stride, data } = parseLvglHeader(bin)
 
   t.is(cf, 0x08, 'cf byte should be I2 (0x08)')
@@ -218,7 +219,7 @@ test('indexed PNG fast path preserves palette and indices when capacity allows',
 
 test('indexed PNG fast path still applies align and premultiply options', (t) => {
   const png = loadTestImage('fixture-indexed-trns-preserve.png')
-  const bin = imageToBin(png, 'I2', 0, 4, true, 'NONE')
+  const bin = imageToBin(png, { cf: 'I2', align: 4, premultiply: true })
   const { flags, stride, data } = parseLvglHeader(bin)
 
   t.truthy(flags & 0x01, 'premultiplied flag should be set')
@@ -232,11 +233,11 @@ test('indexed PNG fast path still applies align and premultiply options', (t) =>
 
 test('premultiplied indexed decode returns the same RGBA as non-premultiplied decode', (t) => {
   const png = loadTestImage('fixture-indexed-trns-preserve.png')
-  const normal = imageToBin(png, 'I2', 0, 1, false, 'NONE')
-  const premultiplied = imageToBin(png, 'I2', 0, 1, true, 'NONE')
+  const normal = imageToBin(png, { cf: 'I2' })
+  const premultiplied = imageToBin(png, { cf: 'I2', premultiply: true })
 
-  const rgbaNormal = lvglToRgba(normal, false)
-  const rgbaPremultiplied = lvglToRgba(premultiplied, false)
+  const rgbaNormal = lvglToRgba(normal)
+  const rgbaPremultiplied = lvglToRgba(premultiplied)
 
   t.deepEqual(
     normalizeTransparentRgba(rgbaPremultiplied),
@@ -245,9 +246,10 @@ test('premultiplied indexed decode returns the same RGBA as non-premultiplied de
   )
 })
 
+// ColorFormat enum members remain usable as an alternative to string literals
 test('AUTO preserves indexed PNG palette sizing like the Python reference', (t) => {
   const png = loadTestImage('fixture-indexed-optimized-shrink.png')
-  const bin = imageToBin(png, 'AUTO', 0, 1, false, 'NONE')
+  const bin = imageToBin(png, { cf: ColorFormat.AUTO })
   const { cf, stride, data } = parseLvglHeader(bin)
 
   t.is(cf, 0x08, 'AUTO should keep the original 4-entry palette tier (I2)')
@@ -261,7 +263,7 @@ test('AUTO preserves indexed PNG palette sizing like the Python reference', (t) 
 
 test('OPTIMIZED shrinks indexed PNG palette when a smaller tier is losslessly possible', (t) => {
   const png = loadTestImage('fixture-indexed-optimized-shrink.png')
-  const bin = imageToBin(png, 'OPTIMIZED', 0, 1, false, 'NONE')
+  const bin = imageToBin(png, { cf: ColorFormat.OPTIMIZED })
   const { cf, width, height, stride, data } = parseLvglHeader(bin)
 
   t.is(cf, 0x07, 'OPTIMIZED should shrink to I1 after collapsing transparent variants')
@@ -278,8 +280,8 @@ test('OPTIMIZED shrinks indexed PNG palette when a smaller tier is losslessly po
 
 test('OPTIMIZED keeps original indexed palette when compression does not change the tier', (t) => {
   const png = loadTestImage('fixture-indexed-trns-preserve.png')
-  const autoBin = imageToBin(png, 'AUTO', 0, 1, false, 'NONE')
-  const optimizedBin = imageToBin(png, 'OPTIMIZED', 0, 1, false, 'NONE')
+  const autoBin = imageToBin(png, { cf: ColorFormat.AUTO })
+  const optimizedBin = imageToBin(png, { cf: ColorFormat.OPTIMIZED })
 
   t.deepEqual(
     [...optimizedBin],
@@ -290,7 +292,7 @@ test('OPTIMIZED keeps original indexed palette when compression does not change 
 
 test('transparent RGB variants collapse to one transparent palette entry during quantization', (t) => {
   const png = loadTestImage('fixture-transparent-variants.png')
-  const bin = imageToBin(png, 'I8', 0, 1, false, 'NONE')
+  const bin = imageToBin(png, { cf: 'I8' })
   const { data } = parseLvglHeader(bin)
   const palette = data.subarray(0, 256 * 4)
   const indices = unpackRowIndices(data.subarray(256 * 4), 8, 8, 8)
@@ -302,18 +304,42 @@ test('transparent RGB variants collapse to one transparent palette entry during 
 
 test('invalid color format throws', (t) => {
   const png = loadTestImage('simon-twukN12EN7c-unsplash-small.png')
-  t.throws(() => imageToBin(png, 'INVALID_FORMAT', 0, 1, false, 'NONE'))
+  // 'INVALID_FORMAT' is not in the ColorFormat union – cast to any to test runtime error
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  t.throws(() => imageToBin(png, { cf: 'INVALID_FORMAT' as any }))
 })
 
 test('invalid compression method throws', (t) => {
   const png = loadTestImage('simon-twukN12EN7c-unsplash-small.png')
-  t.throws(() => imageToBin(png, 'ARGB8888', 0, 1, false, 'ZSTD'))
+  // 'ZSTD' is not in the CompressMethod union – cast to any to test runtime error
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  t.throws(() => imageToBin(png, { cf: 'ARGB8888', compress: 'ZSTD' as any }))
 })
 
 test('imageToBin rejects stride alignment that overflows LVGL header stride', (t) => {
   const png = loadTestImage('simon-twukN12EN7c-unsplash-small.png')
-  const error = t.throws(() => imageToBin(png, 'ARGB8888', 0, 70_000, false, 'NONE'))
+  const error = t.throws(() => imageToBin(png, { cf: 'ARGB8888', align: 70_000 }))
   t.regex(error.message, /stride exceeds LVGL header limit/i)
+})
+
+test('rgb565Dither produces different output than no-dither for RGB565', (t) => {
+  const jpg = loadTestImage('kalen-emsley-Bkci_8qcdvQ-unsplash-small.jpg')
+  const plain = imageToBin(jpg, { cf: 'RGB565' })
+  const dithered = imageToBin(jpg, { cf: 'RGB565', rgb565Dither: true })
+  t.is(plain[0], 0x19, 'plain: magic byte')
+  t.is(dithered[0], 0x19, 'dithered: magic byte')
+  t.is(plain.length, dithered.length, 'dithered output should have the same size')
+  t.notDeepEqual([...plain], [...dithered], 'dithered pixel data should differ from plain')
+})
+
+test('nemaGfx produces different palette index layout for I8', (t) => {
+  const png = loadTestImage('simon-twukN12EN7c-unsplash-small.png')
+  const plain = imageToBin(png, { cf: 'I8' })
+  const nema = imageToBin(png, { cf: 'I8', nemaGfx: true })
+  t.is(plain[0], 0x19, 'plain: magic byte')
+  t.is(nema[0], 0x19, 'nema: magic byte')
+  t.is(plain.length, nema.length, 'nema output should have the same size')
+  t.notDeepEqual([...plain], [...nema], 'nema index layout should differ from plain')
 })
 
 test('lvglToPng rejects zero-width LVGL images', (t) => {
@@ -325,6 +351,6 @@ test('lvglToPng rejects zero-width LVGL images', (t) => {
   bin.writeUInt16LE(1, 6)
   bin.writeUInt16LE(4, 8)
 
-  const error = t.throws(() => lvglToPng(bin, false))
+  const error = t.throws(() => lvglToPng(bin))
   t.regex(error.message, /image dimensions must be at least 1x1/i)
 })

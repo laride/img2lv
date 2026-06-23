@@ -56,6 +56,8 @@ const {
   },
 })
 export default __napiModule.exports
+export const ColorFormat = __napiModule.exports.ColorFormat
+export const CompressMethod = __napiModule.exports.CompressMethod
 export const imageToBin = __napiModule.exports.imageToBin
 export const imageToC = __napiModule.exports.imageToC
 export const lvglHeight = __napiModule.exports.lvglHeight

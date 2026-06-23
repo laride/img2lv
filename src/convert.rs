@@ -242,15 +242,6 @@ pub enum CompressMethod {
 }
 
 impl CompressMethod {
-  pub fn parse(value: &str) -> Result<Self> {
-    match value.trim().to_ascii_uppercase().as_str() {
-      "NONE" => Ok(Self::None),
-      "RLE" => Ok(Self::Rle),
-      "LZ4" => Ok(Self::Lz4),
-      _ => Err(LvglError::InvalidCompression(value.to_string())),
-    }
-  }
-
   pub fn from_u32(value: u32) -> Result<Self> {
     match value {
       0 => Ok(Self::None),
