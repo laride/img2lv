@@ -2,7 +2,7 @@
 
 mod convert;
 
-use convert::{ColorFormat, CompressMethod, ConvertOptions};
+use convert::{ColorRequest, CompressMethod, ConvertOptions};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
@@ -16,7 +16,7 @@ pub fn image_to_bin(
   compress: String,
 ) -> Result<Buffer> {
   let options = ConvertOptions {
-    cf: ColorFormat::parse(&cf).map_err(to_napi_err)?,
+    cf: ColorRequest::parse(&cf).map_err(to_napi_err)?,
     background,
     align: align as usize,
     premultiply,
@@ -41,7 +41,7 @@ pub fn image_to_c(
   compress: String,
 ) -> Result<String> {
   let options = ConvertOptions {
-    cf: ColorFormat::parse(&cf).map_err(to_napi_err)?,
+    cf: ColorRequest::parse(&cf).map_err(to_napi_err)?,
     background,
     align: align as usize,
     premultiply,

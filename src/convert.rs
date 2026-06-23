@@ -1,7 +1,11 @@
 use base64::Engine;
 use image::{DynamicImage, ImageBuffer, ImageFormat, Rgba, RgbaImage};
 use lz4_flex::block::{compress as lz4_compress, decompress as lz4_decompress};
+use png::{
+  BitDepth as PngBitDepth, ColorType as PngColorType, Decoder as PngDecoder, Transformations,
+};
 use std::fmt::Write as _;
+use std::io::{BufReader, Cursor};
 use thiserror::Error;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -55,11 +59,8 @@ pub enum ColorFormat {
 }
 
 impl ColorFormat {
-  pub fn parse(value: &str) -> Result<Option<Self>> {
+  pub fn parse(value: &str) -> Result<Self> {
     let normalized = value.trim().to_ascii_uppercase();
-    if normalized == "AUTO" {
-      return Ok(None);
-    }
     let cf = match normalized.as_str() {
       "UNKNOWN" => Self::Unknown,
       "RAW" => Self::Raw,
@@ -84,7 +85,7 @@ impl ColorFormat {
       "ARGB8888_PREMULTIPLIED" => Self::Argb8888Premultiplied,
       _ => return Err(LvglError::InvalidColorFormat(value.to_string())),
     };
-    Ok(Some(cf))
+    Ok(cf)
   }
 
   pub fn from_byte(value: u8) -> Result<Self> {
@@ -184,6 +185,13 @@ impl ColorFormat {
     )
   }
 
+  pub fn supports_premultiply(self) -> bool {
+    matches!(
+      self,
+      Self::I1 | Self::I2 | Self::I4 | Self::I8 | Self::Argb8888 | Self::Argb8565 | Self::Rgb565A8
+    )
+  }
+
   pub fn is_indexed(self) -> bool {
     self.ncolors() != 0
   }
@@ -204,6 +212,24 @@ impl ColorFormat {
         | Self::Rgb565Swapped
         | Self::Argb8888Premultiplied
     )
+  }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ColorRequest {
+  Auto,
+  Optimized,
+  Explicit(ColorFormat),
+}
+
+impl ColorRequest {
+  pub fn parse(value: &str) -> Result<Self> {
+    let normalized = value.trim().to_ascii_uppercase();
+    match normalized.as_str() {
+      "AUTO" => Ok(Self::Auto),
+      "OPTIMIZED" => Ok(Self::Optimized),
+      _ => Ok(Self::Explicit(ColorFormat::parse(value)?)),
+    }
   }
 }
 
@@ -237,7 +263,7 @@ impl CompressMethod {
 
 #[derive(Clone, Copy, Debug)]
 pub struct ConvertOptions {
-  pub cf: Option<ColorFormat>,
+  pub cf: ColorRequest,
   pub background: u32,
   pub align: usize,
   pub premultiply: bool,
@@ -249,7 +275,7 @@ pub struct ConvertOptions {
 impl Default for ConvertOptions {
   fn default() -> Self {
     Self {
-      cf: Some(ColorFormat::I8),
+      cf: ColorRequest::Explicit(ColorFormat::I8),
       background: 0,
       align: 1,
       premultiply: false,
@@ -278,20 +304,27 @@ impl LvglImage {
   }
 
   pub fn from_encoded(data: &[u8], options: ConvertOptions) -> Result<Self> {
+    if let Some(image) = try_from_indexed_png(data, &options)? {
+      return finalize_image(image, options);
+    }
     Self::from_dynamic(image::load_from_memory(data)?, options)
   }
 
   pub fn from_rgba(rgba: &RgbaImage, options: ConvertOptions) -> Result<Self> {
     let (w, h) = rgba.dimensions();
-    if w > u16::MAX as u32 || h > u16::MAX as u32 {
-      return Err(LvglError::Parameter(format!("w, h overflow: {w}x{h}")));
-    }
+    validate_image_dimensions_u32(w, h)?;
     if options.align == 0 {
       return Err(LvglError::Parameter("align must be at least 1".to_string()));
     }
-    let cf = options.cf.unwrap_or_else(|| auto_indexed_cf(rgba));
-    let mut image = if cf.is_indexed() {
-      rgba_to_indexed(rgba, cf, options.nema_gfx)?
+    let normalize_transparent = !matches!(options.cf, ColorRequest::Auto);
+    let cf = match options.cf {
+      ColorRequest::Auto => auto_indexed_cf(rgba, false),
+      ColorRequest::Optimized => auto_indexed_cf(rgba, true),
+      ColorRequest::Explicit(cf) => cf,
+    };
+    validate_premultiply_option(cf, options.premultiply)?;
+    let image = if cf.is_indexed() {
+      rgba_to_indexed(rgba, cf, options.nema_gfx, normalize_transparent)?
     } else if cf.is_alpha_only() {
       rgba_to_alpha_only(rgba, cf)?
     } else if cf == ColorFormat::Al88 {
@@ -303,18 +336,22 @@ impl LvglImage {
     } else {
       return Err(LvglError::InvalidColorFormat(cf.name().to_string()));
     };
-    image.adjust_stride_align(options.align)?;
-    if options.premultiply {
-      image.premultiply()?;
-    }
-    Ok(image)
+    finalize_image(image, options)
   }
 
   pub fn from_data(cf: ColorFormat, w: u16, h: u16, data: Vec<u8>, stride: u16) -> Result<Self> {
+    validate_image_dimensions_u16(w, h)?;
     let stride = if stride == 0 {
-      default_stride(cf, w as usize) as u16
+      validate_stride(default_stride(cf, w as usize))?
     } else {
-      stride
+      let s = validate_stride(stride as usize)?;
+      let min = default_stride(cf, w as usize);
+      if (s as usize) < min {
+        return Err(LvglError::Parameter(format!(
+          "stride is too small: {s}, minimal: {min}"
+        )));
+      }
+      s
     };
     let expected = data_len(cf, w as usize, h as usize, stride as usize);
     if data.len() != expected {
@@ -364,8 +401,14 @@ impl LvglImage {
     let cf_caps = cf_re
       .captures(source)
       .ok_or_else(|| LvglError::Format("missing .cf".to_string()))?;
-    let cf = ColorFormat::parse(&cf_caps[1])?
-      .ok_or_else(|| LvglError::Format("AUTO is not valid in C array".to_string()))?;
+    let cf = match ColorRequest::parse(&cf_caps[1])? {
+      ColorRequest::Explicit(cf) => cf,
+      ColorRequest::Auto | ColorRequest::Optimized => {
+        return Err(LvglError::Format(
+          "AUTO/OPTIMIZED are not valid in C array".to_string(),
+        ))
+      }
+    };
     let w = num("w")?;
     let h = num("h")?;
     let stride = num("stride")?;
@@ -387,11 +430,12 @@ impl LvglImage {
     if align == 0 {
       return Err(LvglError::Parameter("align must be at least 1".to_string()));
     }
-    let new_stride = align_to(default_stride(self.cf, self.w as usize), align);
+    let new_stride = align_to(default_stride(self.cf, self.w as usize), align)?;
     self.adjust_stride(new_stride)
   }
 
   pub fn adjust_stride(&mut self, new_stride: usize) -> Result<()> {
+    let new_stride = validate_stride(new_stride)? as usize;
     let old_stride = self.stride as usize;
     if new_stride == old_stride {
       return Ok(());
@@ -442,14 +486,17 @@ impl LvglImage {
     }
     match self.cf {
       ColorFormat::Argb8888 => {
+        // NOTE: The Python reference uses `>> 8` (divides by 256) which gives a max premultiplied
+        // value of 254 for fully opaque pixels (255 * 255 >> 8 = 254). We use `/ 255` here for
+        // mathematical correctness and consistency with the other formats in this function.
         let line_width = self.w as usize * 4;
         for y in 0..self.h as usize {
           let row = y * self.stride as usize;
           for i in (0..line_width).step_by(4) {
-            let a = self.data[row + i + 3] as u16;
-            self.data[row + i] = ((self.data[row + i] as u16 * a) >> 8) as u8;
-            self.data[row + i + 1] = ((self.data[row + i + 1] as u16 * a) >> 8) as u8;
-            self.data[row + i + 2] = ((self.data[row + i + 2] as u16 * a) >> 8) as u8;
+            let a = self.data[row + i + 3] as u32;
+            self.data[row + i] = (self.data[row + i] as u32 * a / 255) as u8;
+            self.data[row + i + 1] = (self.data[row + i + 1] as u32 * a / 255) as u8;
+            self.data[row + i + 2] = (self.data[row + i + 2] as u32 * a / 255) as u8;
           }
         }
       }
@@ -486,11 +533,12 @@ impl LvglImage {
         }
       }
       cf if cf.is_indexed() => {
+        // NOTE: The Python reference uses `>> 8` here; we use `/ 255` for correctness.
         for i in (0..cf.ncolors() * 4).step_by(4) {
-          let a = self.data[i + 3] as u16;
-          self.data[i] = ((self.data[i] as u16 * a) >> 8) as u8;
-          self.data[i + 1] = ((self.data[i + 1] as u16 * a) >> 8) as u8;
-          self.data[i + 2] = ((self.data[i + 2] as u16 * a) >> 8) as u8;
+          let a = self.data[i + 3] as u32;
+          self.data[i] = (self.data[i] as u32 * a / 255) as u8;
+          self.data[i + 1] = (self.data[i + 1] as u32 * a / 255) as u8;
+          self.data[i + 2] = (self.data[i + 2] as u32 * a / 255) as u8;
         }
       }
       _ => {
@@ -542,10 +590,11 @@ impl LvglImage {
       flags.push_str(" | LV_IMAGE_FLAGS_PREMULTIPLIED");
     }
     let macro_name = format!("LV_ATTRIBUTE_{}", stem.to_ascii_uppercase());
+    let version = env!("CARGO_PKG_VERSION");
     let mut out = format!(
       r#"
 /**
- * Auto-generated by img2lv
+ * Auto-generated by img2lv v{version}
  * Bugs and issues: https://github.com/laride/img2lv
  */
 #if defined(LV_LVGL_H_INCLUDE_SIMPLE)
@@ -759,13 +808,25 @@ pub fn base64_png_from_lvgl(input: &[u8], is_c_array: bool) -> Result<String> {
 // Indexed color quantization using exoquant (pure Rust, WASM-compatible)
 // ---------------------------------------------------------------------------
 
-fn rgba_to_indexed(rgba: &RgbaImage, cf: ColorFormat, nema_gfx: bool) -> Result<LvglImage> {
+fn rgba_to_indexed(
+  rgba: &RgbaImage,
+  cf: ColorFormat,
+  nema_gfx: bool,
+  normalize_transparent: bool,
+) -> Result<LvglImage> {
   let capacity = cf.ncolors();
   let w = rgba.width() as usize;
 
   let pixels: Vec<exoquant::Color> = rgba
     .pixels()
-    .map(|p| exoquant::Color::new(p[0], p[1], p[2], p[3]))
+    .map(|p| {
+      let [r, g, b, a] = if normalize_transparent {
+        normalize_transparent_pixel(p.0)
+      } else {
+        p.0
+      };
+      exoquant::Color::new(r, g, b, a)
+    })
     .collect();
 
   let optimizer = exoquant::optimizer::KMeans;
@@ -794,6 +855,95 @@ fn rgba_to_indexed(rgba: &RgbaImage, cf: ColorFormat, nema_gfx: bool) -> Result<
     pack_indices(&indexes_u8, cf.bpp(), w, &mut data);
   }
   LvglImage::from_data(cf, rgba.width() as u16, rgba.height() as u16, data, 0)
+}
+
+fn try_from_indexed_png(data: &[u8], options: &ConvertOptions) -> Result<Option<LvglImage>> {
+  let mode = match options.cf {
+    ColorRequest::Auto => IndexedPngMode::Auto,
+    ColorRequest::Optimized => IndexedPngMode::Optimized,
+    ColorRequest::Explicit(cf) if cf.is_indexed() => IndexedPngMode::Explicit(cf),
+    ColorRequest::Explicit(_) => return Ok(None),
+  };
+  let Some(metadata) = parse_indexed_png_metadata(data)? else {
+    return Ok(None);
+  };
+
+  let cursor = Cursor::new(data);
+  let mut decoder = PngDecoder::new(BufReader::new(cursor));
+  decoder.set_transformations(Transformations::IDENTITY);
+  let mut reader = decoder
+    .read_info()
+    .map_err(|e| LvglError::Format(format!("png decode error: {e}")))?;
+  let palette_len = metadata.palette_rgb.len() / 3;
+  if palette_len == 0 {
+    return Ok(None);
+  }
+
+  let mut raw = vec![
+    0;
+    reader.output_buffer_size().ok_or_else(|| {
+      LvglError::Format("png indexed output buffer size overflow".to_string())
+    })?
+  ];
+  let frame = reader
+    .next_frame(&mut raw)
+    .map_err(|e| LvglError::Format(format!("png decode error: {e}")))?;
+
+  validate_image_dimensions_u32(frame.width, frame.height)?;
+  let indexes = unpack_png_indices(
+    &raw[..frame.buffer_size()],
+    metadata.bit_depth,
+    frame.width as usize,
+    frame.height as usize,
+  )?;
+  let w = frame.width as u16;
+  let h = frame.height as u16;
+  let original = build_indexed_image_from_palette(
+    w,
+    h,
+    indexed_cf_for_palette_len(palette_len),
+    &metadata.palette_rgb,
+    metadata.trns.as_deref(),
+    &indexes,
+    options.nema_gfx,
+  )?;
+
+  let image = match mode {
+    // Match the Python reference for AUTO: preserve indexed PNG palette/indexes as-is
+    // and only pick the LVGL indexed tier from the source palette length.
+    IndexedPngMode::Auto => original,
+    IndexedPngMode::Explicit(cf) => {
+      if palette_len > cf.ncolors() {
+        return Ok(None);
+      }
+      build_indexed_image_from_palette(
+        w,
+        h,
+        cf,
+        &metadata.palette_rgb,
+        metadata.trns.as_deref(),
+        &indexes,
+        options.nema_gfx,
+      )?
+    }
+    IndexedPngMode::Optimized => {
+      let optimized = optimize_indexed_png_palette(
+        w,
+        h,
+        &metadata.palette_rgb,
+        metadata.trns.as_deref(),
+        &indexes,
+        options.nema_gfx,
+      )?;
+      if optimized.data.len() < original.data.len() {
+        optimized
+      } else {
+        original
+      }
+    }
+  };
+
+  Ok(Some(image))
 }
 
 fn rgba_to_alpha_only(rgba: &RgbaImage, cf: ColorFormat) -> Result<LvglImage> {
@@ -979,6 +1129,14 @@ fn unpack_to_rgba(img: &LvglImage) -> Result<RgbaImage> {
         }
       }
       ColorFormat::Argb8888 | ColorFormat::Xrgb8888 | ColorFormat::Argb8888Premultiplied => {
+        // Stored layout: [B, G, R, A].  Copy as straight RGBA for now; if the image carries
+        // premultiplied data (flag or ARGB8888_PREMULTIPLIED format) it will be un-premultiplied
+        // in the post-processing step below.
+        //
+        // NOTE: The Python reference applies another round of alpha multiplication when decoding
+        // ARGB8888_PREMULTIPLIED (effectively double-multiplying the already-premultiplied channels),
+        // which may not produce the intended straight-alpha result. We un-premultiply instead to
+        // recover straight-alpha RGBA for standard PNG/RGBA output.
         for y in 0..h {
           let row = y * stride;
           for x in 0..w {
@@ -1017,15 +1175,48 @@ fn unpack_to_rgba(img: &LvglImage) -> Result<RgbaImage> {
       _ => return Err(LvglError::InvalidColorFormat(img.cf.name().to_string())),
     }
   }
+
+  // Un-premultiply to recover straight-alpha RGBA that PNG viewers and standard RGBA buffers
+  // expect.  This applies when:
+  //   - img.premultiplied is true  — any format whose RGB was explicitly premultiplied via the
+  //     LV_IMAGE_FLAGS_PREMULTIPLIED flag (ARGB8888, indexed, ARGB8565, RGB565A8, …)
+  //   - cf == Argb8888Premultiplied — this format always stores premultiplied RGB regardless of
+  //     the flag
+  //
+  // The inverse formula is:  channel_straight = channel_premult * 255 / alpha  (rounded)
+  // For alpha == 0 all channels are set to 0 (fully transparent, RGB is undefined).
+  // For alpha == 255 the operation is a no-op.
+  let needs_unpremultiply = img.premultiplied || img.cf == ColorFormat::Argb8888Premultiplied;
+  if needs_unpremultiply {
+    for pixel in out.chunks_exact_mut(4) {
+      let a = pixel[3];
+      if a == 0 {
+        pixel[0] = 0;
+        pixel[1] = 0;
+        pixel[2] = 0;
+      } else if a < 255 {
+        let a32 = a as u32;
+        pixel[0] = ((pixel[0] as u32 * 255 + a32 / 2) / a32).min(255) as u8;
+        pixel[1] = ((pixel[1] as u32 * 255 + a32 / 2) / a32).min(255) as u8;
+        pixel[2] = ((pixel[2] as u32 * 255 + a32 / 2) / a32).min(255) as u8;
+      }
+    }
+  }
+
   ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(img.w as u32, img.h as u32, out)
     .ok_or_else(|| LvglError::Format("failed to build output image".to_string()))
 }
 
-fn auto_indexed_cf(rgba: &RgbaImage) -> ColorFormat {
+fn auto_indexed_cf(rgba: &RgbaImage, normalize_transparent: bool) -> ColorFormat {
   let mut colors = Vec::<[u8; 4]>::new();
   for p in rgba.pixels() {
-    if !colors.contains(&p.0) {
-      colors.push(p.0);
+    let pixel = if normalize_transparent {
+      normalize_transparent_pixel(p.0)
+    } else {
+      p.0
+    };
+    if !colors.contains(&pixel) {
+      colors.push(pixel);
       if colors.len() > 16 {
         return ColorFormat::I8;
       }
@@ -1056,8 +1247,16 @@ fn data_len(cf: ColorFormat, w: usize, h: usize, stride: usize) -> usize {
   len
 }
 
-fn align_to(value: usize, align: usize) -> usize {
-  value.div_ceil(align) * align
+fn align_to(value: usize, align: usize) -> Result<usize> {
+  let rem = value % align;
+  if rem == 0 {
+    return Ok(value);
+  }
+  value.checked_add(align - rem).ok_or_else(|| {
+    LvglError::Parameter(format!(
+      "stride alignment overflow: value {value}, align {align}"
+    ))
+  })
 }
 
 fn change_stride(data: &[u8], h: usize, old_stride: usize, new_stride: usize, out: &mut Vec<u8>) {
@@ -1113,7 +1312,7 @@ fn unpack_packed(
   let mask = (1u8 << bpp) - 1;
   for y in 0..h {
     let row = &data[y * stride..(y + 1) * stride];
-    for byte in row {
+    'byte_loop: for byte in row {
       for shift in (0..8).step_by(bpp).map(|s| 8 - bpp - s) {
         let value = (byte >> shift) & mask;
         out.push(if alpha_extend {
@@ -1122,13 +1321,322 @@ fn unpack_packed(
           value
         });
         if out.len() % w == 0 {
-          break;
+          break 'byte_loop;
         }
       }
     }
   }
   out.truncate(w * h);
   out
+}
+
+fn unpack_png_indices(data: &[u8], bit_depth: PngBitDepth, w: usize, h: usize) -> Result<Vec<u8>> {
+  let bpp = match bit_depth {
+    PngBitDepth::One => 1,
+    PngBitDepth::Two => 2,
+    PngBitDepth::Four => 4,
+    PngBitDepth::Eight => 8,
+    _ => {
+      return Err(LvglError::Format(format!(
+        "unsupported indexed png bit depth: {}",
+        bit_depth as u8
+      )))
+    }
+  };
+  let stride = (w * bpp).div_ceil(8);
+  Ok(unpack_packed(data, bpp, w, h, stride, false))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IndexedPngMode {
+  Auto,
+  Optimized,
+  Explicit(ColorFormat),
+}
+
+fn indexed_cf_for_palette_len(palette_len: usize) -> ColorFormat {
+  match palette_len {
+    0..=2 => ColorFormat::I1,
+    3..=4 => ColorFormat::I2,
+    5..=16 => ColorFormat::I4,
+    _ => ColorFormat::I8,
+  }
+}
+
+fn build_indexed_image_from_palette(
+  w: u16,
+  h: u16,
+  cf: ColorFormat,
+  palette_rgb: &[u8],
+  trns: Option<&[u8]>,
+  indexes: &[u8],
+  nema_gfx: bool,
+) -> Result<LvglImage> {
+  let palette_len = palette_rgb.len() / 3;
+  let mut palette = Vec::with_capacity(palette_len);
+  for i in 0..palette_len {
+    let base = i * 3;
+    palette.push([
+      palette_rgb[base],
+      palette_rgb[base + 1],
+      palette_rgb[base + 2],
+      trns.and_then(|alpha| alpha.get(i)).copied().unwrap_or(0xff),
+    ]);
+  }
+  build_indexed_image_from_entries(w, h, cf, &palette, indexes, nema_gfx)
+}
+
+fn build_indexed_image_from_entries(
+  w: u16,
+  h: u16,
+  cf: ColorFormat,
+  palette: &[[u8; 4]],
+  indexes: &[u8],
+  nema_gfx: bool,
+) -> Result<LvglImage> {
+  if palette.len() > cf.ncolors() {
+    return Err(LvglError::Parameter(format!(
+      "palette too large: {}, capacity: {}",
+      palette.len(),
+      cf.ncolors()
+    )));
+  }
+  if let Some(&bad) = indexes.iter().find(|&&i| i as usize >= palette.len()) {
+    return Err(LvglError::Format(format!(
+      "png index out of palette range: {}",
+      bad
+    )));
+  }
+
+  let mut data = Vec::with_capacity(cf.ncolors() * 4 + packed_len(indexes.len(), cf.bpp()));
+  for [r, g, b, a] in palette {
+    data.extend_from_slice(&[*b, *g, *r, *a]);
+  }
+  while data.len() < cf.ncolors() * 4 {
+    data.extend_from_slice(&[255, 255, 255, 0]);
+  }
+
+  if cf == ColorFormat::I8 {
+    if nema_gfx {
+      data.extend(indexes.iter().map(|x| (x >> 4) | ((x & 0x0f) << 4)));
+    } else {
+      data.extend_from_slice(indexes);
+    }
+  } else {
+    pack_indices(indexes, cf.bpp(), w as usize, &mut data);
+  }
+
+  LvglImage::from_data(cf, w, h, data, 0)
+}
+
+fn optimize_indexed_png_palette(
+  w: u16,
+  h: u16,
+  palette_rgb: &[u8],
+  trns: Option<&[u8]>,
+  indexes: &[u8],
+  nema_gfx: bool,
+) -> Result<LvglImage> {
+  let palette_len = palette_rgb.len() / 3;
+  let mut old_palette = Vec::with_capacity(palette_len);
+  for i in 0..palette_len {
+    let base = i * 3;
+    old_palette.push([
+      palette_rgb[base],
+      palette_rgb[base + 1],
+      palette_rgb[base + 2],
+      trns.and_then(|alpha| alpha.get(i)).copied().unwrap_or(0xff),
+    ]);
+  }
+
+  let mut new_palette = Vec::<[u8; 4]>::new();
+  let mut remap = [0u8; 256];
+  let mut seen = [false; 256];
+  for &idx in indexes {
+    let idx = idx as usize;
+    if seen[idx] {
+      continue;
+    }
+    let entry = *old_palette
+      .get(idx)
+      .ok_or_else(|| LvglError::Format(format!("png index out of palette range: {idx}")))?;
+    // Fully transparent entries are visually interchangeable in rendered output, so
+    // OPTIMIZED can merge them onto the first transparent palette entry without
+    // changing the visible result.
+    let key = if entry[3] == 0 { [0, 0, 0, 0] } else { entry };
+    let mapped = new_palette
+      .iter()
+      .position(|candidate| {
+        let candidate_key = if candidate[3] == 0 {
+          [0, 0, 0, 0]
+        } else {
+          *candidate
+        };
+        candidate_key == key
+      })
+      .map(|pos| pos as u8)
+      .unwrap_or_else(|| {
+        new_palette.push(entry);
+        (new_palette.len() - 1) as u8
+      });
+    remap[idx] = mapped;
+    seen[idx] = true;
+  }
+
+  let remapped_indexes = indexes
+    .iter()
+    .map(|&idx| {
+      if !seen[idx as usize] {
+        Err(LvglError::Format(format!(
+          "png index out of palette range: {}",
+          idx
+        )))
+      } else {
+        Ok(remap[idx as usize])
+      }
+    })
+    .collect::<Result<Vec<_>>>()?;
+  let cf = indexed_cf_for_palette_len(new_palette.len());
+  build_indexed_image_from_entries(w, h, cf, &new_palette, &remapped_indexes, nema_gfx)
+}
+
+struct IndexedPngMetadata {
+  bit_depth: PngBitDepth,
+  palette_rgb: Vec<u8>,
+  trns: Option<Vec<u8>>,
+}
+
+fn parse_indexed_png_metadata(data: &[u8]) -> Result<Option<IndexedPngMetadata>> {
+  if !is_png(data) {
+    return Ok(None);
+  }
+  if data.len() < 33 {
+    return Err(LvglError::Format("png is too short".to_string()));
+  }
+  let ihdr_len = u32::from_be_bytes([data[8], data[9], data[10], data[11]]) as usize;
+  if ihdr_len != 13 || &data[12..16] != b"IHDR" {
+    return Err(LvglError::Format("png has invalid IHDR chunk".to_string()));
+  }
+
+  let bit_depth = PngBitDepth::from_u8(data[24])
+    .ok_or_else(|| LvglError::Format(format!("unsupported png bit depth: {}", data[24])))?;
+  if data[25] != PngColorType::Indexed as u8 {
+    return Ok(None);
+  }
+
+  let mut pos = 8usize;
+  let mut palette_rgb = None;
+  let mut trns = None;
+  while pos + 12 <= data.len() {
+    let len = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+    let typ = &data[pos + 4..pos + 8];
+    let chunk_data_start = pos + 8;
+    let chunk_data_end = chunk_data_start
+      .checked_add(len)
+      .ok_or_else(|| LvglError::Format("png chunk length overflow".to_string()))?;
+    let chunk_end = chunk_data_end
+      .checked_add(4)
+      .ok_or_else(|| LvglError::Format("png chunk length overflow".to_string()))?;
+    if chunk_end > data.len() {
+      return Err(LvglError::Format(
+        "png chunk extends past end of file".to_string(),
+      ));
+    }
+
+    match typ {
+      b"PLTE" => {
+        let palette = &data[chunk_data_start..chunk_data_end];
+        if palette.is_empty() {
+          return Err(LvglError::Format(
+            "indexed png palette is empty".to_string(),
+          ));
+        }
+        if !palette.len().is_multiple_of(3) {
+          return Err(LvglError::Format(
+            "indexed png palette length is not divisible by 3".to_string(),
+          ));
+        }
+        palette_rgb = Some(palette.to_vec());
+      }
+      b"tRNS" => {
+        trns = Some(data[chunk_data_start..chunk_data_end].to_vec());
+      }
+      b"IDAT" | b"IEND" => break,
+      _ => {}
+    }
+
+    pos = chunk_end;
+  }
+
+  Ok(palette_rgb.map(|palette_rgb| IndexedPngMetadata {
+    bit_depth,
+    palette_rgb,
+    trns,
+  }))
+}
+
+fn finalize_image(mut image: LvglImage, options: ConvertOptions) -> Result<LvglImage> {
+  if options.align == 0 {
+    return Err(LvglError::Parameter("align must be at least 1".to_string()));
+  }
+  validate_premultiply_option(image.cf, options.premultiply)?;
+  image.adjust_stride_align(options.align)?;
+  if options.premultiply {
+    image.premultiply()?;
+  }
+  Ok(image)
+}
+
+fn normalize_transparent_pixel([r, g, b, a]: [u8; 4]) -> [u8; 4] {
+  // Normalize fully transparent pixels before palette quantization so invisible RGB differences
+  // do not consume multiple palette entries. The Python reference does not do this, but without
+  // normalization a source image may end up with several distinct "transparent colors" that are
+  // visually identical.
+  if a == 0 {
+    [0, 0, 0, 0]
+  } else {
+    [r, g, b, a]
+  }
+}
+
+fn validate_image_dimensions_u32(w: u32, h: u32) -> Result<()> {
+  if w == 0 || h == 0 {
+    return Err(LvglError::Parameter(format!(
+      "image dimensions must be at least 1x1, got {w}x{h}"
+    )));
+  }
+  if w > u16::MAX as u32 || h > u16::MAX as u32 {
+    return Err(LvglError::Parameter(format!(
+      "image dimensions exceed LVGL header limits: {w}x{h} (max 65535x65535)"
+    )));
+  }
+  Ok(())
+}
+
+fn validate_image_dimensions_u16(w: u16, h: u16) -> Result<()> {
+  validate_image_dimensions_u32(w as u32, h as u32)
+}
+
+fn validate_stride(stride: usize) -> Result<u16> {
+  u16::try_from(stride).map_err(|_| {
+    LvglError::Parameter(format!(
+      "stride exceeds LVGL header limit: {stride} bytes (max 65535)"
+    ))
+  })
+}
+
+fn validate_premultiply_option(cf: ColorFormat, premultiply: bool) -> Result<()> {
+  if premultiply && !cf.supports_premultiply() {
+    return Err(LvglError::Parameter(format!(
+      "premultiply not supported for {}",
+      cf.name()
+    )));
+  }
+  Ok(())
+}
+
+fn is_png(data: &[u8]) -> bool {
+  data.len() >= 8 && data[..8] == [137, 80, 78, 71, 13, 10, 26, 10]
 }
 
 fn bit_extend(value: u8, bpp: usize) -> u8 {
@@ -1317,7 +1825,9 @@ fn nonrepeat_count(data: &[u8], blksize: usize, threshold: usize) -> usize {
     if chunk == pre {
       repeat += 1;
       if repeat > threshold {
-        break;
+        // The trailing run is long enough to be a standalone repeat run; exclude
+        // it so the caller can emit it separately as a more compact repeat block.
+        return nonrepeat.min(127);
       }
     } else {
       pre = chunk;

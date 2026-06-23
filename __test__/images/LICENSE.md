@@ -2,7 +2,9 @@
 
 This directory contains image assets used exclusively for image encoding and decoding tests.
 
-All images were obtained from Unsplash and remain subject to the Unsplash License. The copyright of each image belongs to its respective copyright holder(s).
+## Unsplash Images
+
+Images whose filenames contain `unsplash` were obtained from Unsplash and remain subject to the Unsplash License. The copyright of each image belongs to its respective copyright holder(s).
 
 The Unsplash License is available at: https://unsplash.com/license
 
@@ -19,3 +21,11 @@ Source images:
 - https://unsplash.com/photos/landscape-photography-of-mountains-twukN12EN7cs
 
 For complete licensing terms and any updates, please refer to the official Unsplash License page.
+
+## Constructed Test Fixtures
+
+Constructed test fixtures in this directory are provided under the MIT License:
+
+- `fixture-indexed-trns-preserve.png`
+- `fixture-indexed-optimized-shrink.png`
+- `fixture-transparent-variants.png`
