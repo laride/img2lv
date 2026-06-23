@@ -108,6 +108,8 @@ const { instance: __napiInstance, module: __wasiModule, napiModule: __napiModule
   },
 })
 module.exports = __napiModule.exports
+module.exports.ColorFormat = __napiModule.exports.ColorFormat
+module.exports.CompressMethod = __napiModule.exports.CompressMethod
 module.exports.imageToBin = __napiModule.exports.imageToBin
 module.exports.imageToC = __napiModule.exports.imageToC
 module.exports.lvglHeight = __napiModule.exports.lvglHeight
