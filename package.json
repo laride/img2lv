@@ -1,6 +1,6 @@
 {
   "name": "img2lv",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Convert common static images (PNG, JPEG, WebP, BMP, etc.) to and from LVGL v9 image data.",
   "main": "index.js",
   "repository": {

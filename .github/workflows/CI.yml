@@ -372,7 +372,8 @@ jobs:
 
           npm config set provenance true
 
-          echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
+          # use npm OIDC
+
           if [[ "$TAG_NAME" == *-* ]]; then
             npm publish --tag next --access public
           else
@@ -380,4 +381,3 @@ jobs:
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
