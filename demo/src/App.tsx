@@ -6,7 +6,7 @@ import Reverse from './pages/Reverse'
 
 export default function App() {
   return (
-    <Router root={Layout}>
+    <Router base={import.meta.env.BASE_URL} root={Layout}>
       <Route path="/" component={Home} />
       <Route path="/forward" component={Forward} />
       <Route path="/reverse" component={Reverse} />
