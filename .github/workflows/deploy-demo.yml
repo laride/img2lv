@@ -1,0 +1,62 @@
+name: Deploy Demo
+
+on:
+  push:
+    branches:
+      - ghpages
+    tags-ignore:
+      - '**'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-demo
+  cancel-in-progress: true
+
+jobs:
+  check-and-deploy:
+    name: Check & Deploy
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+      contents: read
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Fetch main branch
+        run: git fetch origin main --depth=1
+
+      - name: Verify demo is in sync with main
+        run: node demo/scripts/verify-sync.mjs origin/main
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          package_json_file: demo/package.json
+          cache: true
+          cache_dependency_path: demo/pnpm-lock.yaml
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Install demo dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: demo
+
+      - name: Build demo
+        run: pnpm build
+        working-directory: demo
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: demo/dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
