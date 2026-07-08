@@ -1,3 +1,4 @@
+import { Buffer } from 'buffer'
 import { createSignal, Show } from 'solid-js'
 import Dropzone from '../components/Dropzone'
 import { ensureInit, getModule } from '../lib/img2lv'
@@ -37,7 +38,7 @@ export default function Reverse() {
       await ensureInit()
       const { lvglToPng, lvglWidth, lvglHeight } = getModule()
       const arrayBuf = await f.arrayBuffer()
-      const input = new Uint8Array(arrayBuf) as any
+      const input = Buffer.from(arrayBuf)
 
       const width = lvglWidth(input)
       const height = lvglHeight(input)

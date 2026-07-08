@@ -1,3 +1,4 @@
+import { Buffer } from 'buffer'
 import { createSignal, Show } from 'solid-js'
 import Dropzone from '../components/Dropzone'
 import { ensureInit, getModule, COLOR_FORMATS, COMPRESS_METHODS } from '../lib/img2lv'
@@ -40,7 +41,7 @@ export default function Forward() {
       await ensureInit()
       const { imageToBin, imageToC } = getModule()
       const arrayBuf = await f.arrayBuffer()
-      const input = new Uint8Array(arrayBuf) as any
+      const input = Buffer.from(arrayBuf)
 
       const options: ConvertOptions = {
         cf: cf() as ConvertOptions['cf'],

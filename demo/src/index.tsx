@@ -1,6 +1,6 @@
 /* @refresh reload */
 import { Buffer } from 'buffer'
-globalThis.Buffer = Buffer
+;(globalThis as typeof globalThis & { Buffer: typeof Buffer }).Buffer = Buffer
 
 import { render } from 'solid-js/web'
 import App from './App'
