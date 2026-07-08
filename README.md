@@ -4,6 +4,8 @@ Convert common static images (PNG, JPEG, WebP, BMP, etc.) to and from LVGL v9 im
 
 Supports Node.js and Browser (via WebAssembly). Compatibility with other JS runtimes such as Deno and Bun has not been tested.
 
+You can try out the features of this repository online at https://laride.github.io/img2lv/.
+
 ## Installation
 
 ```bash
