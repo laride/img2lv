@@ -130,6 +130,11 @@ fn options_to_convert(o: ConvertOptions) -> convert::ConvertOptions {
   }
 }
 
+/// Convert a common image (PNG, JPEG, WebP, BMP, etc.) into an LVGL v9 binary
+/// blob that can be written straight to a `.bin` file.
+///
+/// The returned `Buffer` starts with the 12-byte LVGL image header followed by
+/// the pixel payload (optionally compressed according to `options.compress`).
 #[napi]
 pub fn image_to_bin(input: Buffer, options: ConvertOptions) -> Result<Buffer> {
   let result =
@@ -137,6 +142,11 @@ pub fn image_to_bin(input: Buffer, options: ConvertOptions) -> Result<Buffer> {
   Ok(result.into())
 }
 
+/// Convert a common image into an LVGL v9 C source file ready for compilation.
+///
+/// `inputName` is the original filename (used to derive the C variable name
+/// when `outputName` is not provided). The returned string contains the
+/// complete `.c` file text including the `lv_image_dsc_t` descriptor.
 #[napi]
 pub fn image_to_c(
   input: Buffer,
@@ -164,18 +174,35 @@ fn decode_is_c_array(opts: Option<DecodeOptions>) -> bool {
   opts.and_then(|o| o.is_c_array).unwrap_or(false)
 }
 
+/// Decode an LVGL image (binary blob or C array) back to a PNG `Buffer`.
+///
+/// Accepts either a raw binary blob (12-byte header + payload) or, when
+/// `options.isCArray` is `true`, a `Buffer` containing UTF-8 encoded C source
+/// text produced by `imageToC` (e.g. `Buffer.from(cSource, "utf8")`).
+/// Note: C array parsing is not available on the WASM target.
 #[napi]
 pub fn lvgl_to_png(input: Buffer, options: Option<DecodeOptions>) -> Result<Buffer> {
   let result = convert::lvgl_to_png(&input, decode_is_c_array(options)).map_err(to_napi_err)?;
   Ok(result.into())
 }
 
+/// Decode an LVGL image to a raw RGBA pixel buffer (4 bytes per pixel,
+/// row-major, no padding).
+///
+/// Like `lvglToPng`, accepts a binary blob or, when `options.isCArray` is
+/// `true`, a UTF-8 encoded `Buffer` of C source text.
+/// Note: C array parsing is not available on the WASM target.
+/// The buffer length equals `width × height × 4`. Use `lvglWidth` /
+/// `lvglHeight` to obtain the dimensions when needed.
 #[napi]
 pub fn lvgl_to_rgba(input: Buffer, options: Option<DecodeOptions>) -> Result<Buffer> {
   let result = convert::lvgl_to_rgba(&input, decode_is_c_array(options)).map_err(to_napi_err)?;
   Ok(result.into())
 }
 
+/// Read the pixel width from an LVGL image header.
+/// Also accepts C array input when `options.isCArray` is `true` (not
+/// available on the WASM target).
 #[napi]
 pub fn lvgl_width(input: Buffer, options: Option<DecodeOptions>) -> Result<u32> {
   convert::lvgl_width(&input, decode_is_c_array(options))
@@ -183,6 +210,9 @@ pub fn lvgl_width(input: Buffer, options: Option<DecodeOptions>) -> Result<u32> 
     .map_err(to_napi_err)
 }
 
+/// Read the pixel height from an LVGL image header.
+/// Also accepts C array input when `options.isCArray` is `true` (not
+/// available on the WASM target).
 #[napi]
 pub fn lvgl_height(input: Buffer, options: Option<DecodeOptions>) -> Result<u32> {
   convert::lvgl_height(&input, decode_is_c_array(options))

@@ -3,6 +3,12 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-07-15
+
+### Added
+
+- Added JSDoc documentation to all public API functions (`imageToBin`, `imageToC`, `lvglToPng`, `lvglToRgba`, `lvglWidth`, `lvglHeight`) in the generated `index.d.ts`, providing inline descriptions and parameter guidance in editors that support hover documentation.
+
 ## [0.2.0] - 2026-06-23
 
 ### Added
@@ -46,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial public release of `img2lv` with Node.js bindings for converting common static images to and from LVGL v9 image data.
 
+[0.2.1]: https://github.com/laride/img2lv/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/laride/img2lv/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/laride/img2lv/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/laride/img2lv/releases/tag/v0.1.0

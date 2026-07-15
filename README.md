@@ -52,9 +52,48 @@ const file = await fetch('/icon.png').then((r) => r.arrayBuffer())
 const bin = imageToBin(Buffer.from(file), { cf: 'ARGB8888' })
 ```
 
-> **Note:** C array parsing (`isCArray = true`) is not available in the browser build.
+The browser WASM build uses shared `WebAssembly.Memory`, which requires `SharedArrayBuffer`. Modern browsers only expose `SharedArrayBuffer` in a [cross-origin isolated](https://developer.mozilla.org/en-US/docs/Web/API/SharedArrayBuffer#security_requirements) context. Your page must be served with these response headers:
+
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+If you control the server or dev server, configure the headers there. For example, with Vite:
+
+```js
+// vite.config.js
+export default {
+  server: {
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+    },
+  },
+  preview: {
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+    },
+  },
+}
+```
+
+On static hosts that do not let you set custom headers (e.g. GitHub Pages), use a client-side workaround such as [`coi-serviceworker`](https://github.com/gzuidhof/coi-serviceworker). Place `coi-serviceworker.min.js` next to your `index.html` and load it before your app:
+
+```html
+<script src="coi-serviceworker.min.js"></script>
+```
+
+The script registers a service worker that injects the required COOP/COEP headers. The page reloads once on first visit; after that, `crossOriginIsolated` should be `true`.
+
+You will also need a `Buffer` polyfill in the browser (e.g. the [`buffer`](https://www.npmjs.com/package/buffer) package) and assign it to `globalThis.Buffer` before calling the library.
+
+C array parsing (`isCArray = true`) is not available in the browser build.
 
 ## API
+
+API documentation generated from doc comments is available at https://laride.github.io/img2lv/doc/.
 
 ### `imageToBin(input, options)`
 

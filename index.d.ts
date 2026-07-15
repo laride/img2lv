@@ -73,14 +73,56 @@ export interface DecodeOptions {
   isCArray?: boolean
 }
 
+/**
+ * Convert a common image (PNG, JPEG, WebP, BMP, etc.) into an LVGL v9 binary
+ * blob that can be written straight to a `.bin` file.
+ *
+ * The returned `Buffer` starts with the 12-byte LVGL image header followed by
+ * the pixel payload (optionally compressed according to `options.compress`).
+ */
 export declare function imageToBin(input: Buffer, options: ConvertOptions): Buffer
 
+/**
+ * Convert a common image into an LVGL v9 C source file ready for compilation.
+ *
+ * `inputName` is the original filename (used to derive the C variable name
+ * when `outputName` is not provided). The returned string contains the
+ * complete `.c` file text including the `lv_image_dsc_t` descriptor.
+ */
 export declare function imageToC(input: Buffer, inputName: string, outputName: string | undefined | null, options: ConvertOptions): string
 
+/**
+ * Read the pixel height from an LVGL image header.
+ * Also accepts C array input when `options.isCArray` is `true` (not
+ * available on the WASM target).
+ */
 export declare function lvglHeight(input: Buffer, options?: DecodeOptions | undefined | null): number
 
+/**
+ * Decode an LVGL image (binary blob or C array) back to a PNG `Buffer`.
+ *
+ * Accepts either a raw binary blob (12-byte header + payload) or, when
+ * `options.isCArray` is `true`, a `Buffer` containing UTF-8 encoded C source
+ * text produced by `imageToC` (e.g. `Buffer.from(cSource, "utf8")`).
+ * Note: C array parsing is not available on the WASM target.
+ */
 export declare function lvglToPng(input: Buffer, options?: DecodeOptions | undefined | null): Buffer
 
+/**
+ * Decode an LVGL image to a raw RGBA pixel buffer (4 bytes per pixel,
+ * row-major, no padding).
+ *
+ * Like `lvglToPng`, accepts a binary blob or, when `options.isCArray` is
+ * `true`, a UTF-8 encoded `Buffer` of C source text.
+ * Note: C array parsing is not available on the WASM target.
+ * The buffer length equals `width × height × 4`. Use `lvglWidth` /
+ * `lvglHeight` to obtain the dimensions when needed.
+ */
 export declare function lvglToRgba(input: Buffer, options?: DecodeOptions | undefined | null): Buffer
 
+/**
+ * Read the pixel width from an LVGL image header.
+ * Also accepts C array input when `options.isCArray` is `true` (not
+ * available on the WASM target).
+ */
 export declare function lvglWidth(input: Buffer, options?: DecodeOptions | undefined | null): number
