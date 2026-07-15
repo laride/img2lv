@@ -557,10 +557,21 @@ const navLinks = [
   .markdown-body pre {
     margin-bottom: 1rem;
     padding: 1rem;
-    background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: var(--radius);
     overflow-x: auto;
+  }
+
+  :root .markdown-body .astro-code,
+  :root .markdown-body .astro-code span {
+    color: var(--shiki-light);
+    background-color: var(--shiki-light-bg);
+  }
+
+  [data-theme='dark'] .markdown-body .astro-code,
+  [data-theme='dark'] .markdown-body .astro-code span {
+    color: var(--shiki-dark);
+    background-color: var(--shiki-dark-bg);
   }
 
   .markdown-body pre code {

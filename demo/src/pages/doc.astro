@@ -1,8 +1,7 @@
 ---
 import Base from '../layouts/Base.astro'
-import { marked } from 'marked'
 
-const modules = import.meta.glob('../generated/**/*.md', { query: '?raw', import: 'default', eager: true })
+const modules = import.meta.glob<{ Content: astroHTML.JSX.Element }>('../generated/**/*.md', { eager: true })
 
 const entries = Object.entries(modules).sort(([a], [b]) => {
   const order = ['README', 'index', 'enumerations', 'interfaces', 'functions']
@@ -12,9 +11,6 @@ const entries = Object.entries(modules).sort(([a], [b]) => {
   }
   return rank(a) - rank(b)
 })
-
-const htmlParts = await Promise.all(entries.map(async ([, content]) => marked.parse(content as string)))
-const html = htmlParts.join('')
 ---
 
 <Base
@@ -28,8 +24,12 @@ const html = htmlParts.join('')
     </p>
   </div>
   {
-    html ? (
-      <div class="markdown-body" set:html={html} />
+    entries.length > 0 ? (
+      <div class="markdown-body">
+        {entries.map(([, { Content }]) => (
+          <Content />
+        ))}
+      </div>
     ) : (
       <p>
         Documentation not generated. Run <code>pnpm docs:gen</code> first.

@@ -26,8 +26,7 @@
   "dependencies": {
     "@astrojs/check": "^0.9.9",
     "buffer": "^6.0.3",
-    "img2lv": "^0.2.1",
-    "marked": "^18.0.6"
+    "img2lv": "^0.2.1"
   },
   "packageManager": "pnpm@11.9.0",
   "prettier": {
