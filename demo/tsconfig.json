@@ -1,16 +1,4 @@
 {
-  "compilerOptions": {
-    "jsx": "preserve",
-    "jsxImportSource": "solid-js",
-    "target": "ESNext",
-    "allowSyntheticDefaultImports": true,
-    "esModuleInterop": true,
-    "isolatedModules": true,
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "noEmit": true,
-    "strict": true,
-    "types": ["vite/client"]
-  },
-  "include": ["src"]
+  "extends": "astro/tsconfigs/strict",
+  "include": ["src", "scripts"]
 }

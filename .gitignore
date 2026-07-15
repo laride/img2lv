@@ -128,3 +128,9 @@ Cargo.lock
 !.yarn/sdks
 !.yarn/versions
 /npm
+
+# Astro
+.astro/
+
+# Generated docs (built at CI time)
+demo/src/generated/

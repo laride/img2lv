@@ -1,0 +1,207 @@
+---
+import Base from '../layouts/Base.astro'
+import { COLOR_FORMATS, COMPRESS_METHODS } from '../lib/dts-enums'
+---
+
+<Base
+  title="Image → LVGL | img2lv"
+  description="Convert standard images (PNG, JPEG, WebP, BMP) to LVGL v9 binary or C source format."
+>
+  <div class="page-header">
+    <h1 class="page-title">Image → LVGL v9 Image Format</h1>
+    <p class="page-desc">Convert standard image files (PNG, JPEG, WebP, BMP) to LVGL v9 binary or C source format.</p>
+  </div>
+
+  <div class="card">
+    <div class="dropzone" id="dropzone">
+      <input type="file" accept="image/*" id="file-input" style="display:none" />
+      <p class="dropzone-text">
+        <strong>Click to browse</strong> or drag and drop<br />
+        <span style="font-size:0.85rem;margin-top:0.25rem;display:inline-block">PNG, JPEG, WebP, BMP, etc.</span>
+      </p>
+    </div>
+    <div class="preview-container" id="preview-container" style="display:none">
+      <img id="preview-image" alt="Preview" class="preview-image" />
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:1rem">
+    <div class="options-grid">
+      <div class="form-group">
+        <label class="form-label">Color Format</label>
+        <select class="form-select" id="cf-select">
+          {
+            COLOR_FORMATS.map((fmt) => (
+              <option value={fmt} selected={fmt === 'OPTIMIZED'}>
+                {fmt}
+              </option>
+            ))
+          }
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Compression</label>
+        <select class="form-select" id="compress-select">
+          {COMPRESS_METHODS.map((m) => <option value={m}>{m}</option>)}
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Output Format</label>
+        <select class="form-select" id="output-mode">
+          <option value="bin">Binary (.bin)</option>
+          <option value="c">C Source (.c)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Stride Align</label>
+        <input class="form-input" type="number" min="1" value="1" id="align-input" />
+      </div>
+    </div>
+    <div style="display:flex;gap:1.5rem;margin-top:0.5rem">
+      <label class="form-checkbox">
+        <input type="checkbox" id="premultiply-check" /> Premultiply Alpha
+      </label>
+      <label class="form-checkbox">
+        <input type="checkbox" id="dither-check" /> RGB565 Dither
+      </label>
+    </div>
+  </div>
+
+  <div style="margin-top:1.25rem;display:flex;gap:0.75rem">
+    <button class="btn btn-primary" id="convert-btn" disabled>Convert</button>
+    <button class="btn btn-secondary" id="download-btn" style="display:none">Download</button>
+  </div>
+
+  <div class="status-msg error" id="error-msg" style="display:none"></div>
+
+  <div class="output-area" id="output-area" style="display:none">
+    <div class="output-header">
+      <span class="output-title">Output</span>
+      <span class="output-stats" id="output-stats"></span>
+    </div>
+    <p id="output-bin-msg" style="color:var(--text-muted);font-size:0.9rem;display:none">
+      Binary output ready for download.
+    </p>
+    <pre class="output-code" id="output-code" style="display:none"></pre>
+  </div>
+</Base>
+
+<script>
+  import { Buffer } from 'buffer'
+  ;(globalThis as any).Buffer = Buffer
+  import { ensureInit, getModule } from '../lib/img2lv'
+
+  const dropzone = document.getElementById('dropzone')!
+  const fileInput = document.getElementById('file-input') as HTMLInputElement
+  const previewContainer = document.getElementById('preview-container')!
+  const previewImage = document.getElementById('preview-image') as HTMLImageElement
+  const cfSelect = document.getElementById('cf-select') as HTMLSelectElement
+  const compressSelect = document.getElementById('compress-select') as HTMLSelectElement
+  const outputMode = document.getElementById('output-mode') as HTMLSelectElement
+  const alignInput = document.getElementById('align-input') as HTMLInputElement
+  const premultiplyCheck = document.getElementById('premultiply-check') as HTMLInputElement
+  const ditherCheck = document.getElementById('dither-check') as HTMLInputElement
+  const convertBtn = document.getElementById('convert-btn') as HTMLButtonElement
+  const downloadBtn = document.getElementById('download-btn') as HTMLButtonElement
+  const errorMsg = document.getElementById('error-msg')!
+  const outputArea = document.getElementById('output-area')!
+  const outputStats = document.getElementById('output-stats')!
+  const outputBinMsg = document.getElementById('output-bin-msg')!
+  const outputCode = document.getElementById('output-code')!
+
+  let currentFile: File | null = null
+  let resultData: ArrayBuffer | null = null
+
+  function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+    const copy = new Uint8Array(bytes.byteLength)
+    copy.set(bytes)
+    return copy.buffer as ArrayBuffer
+  }
+
+  function handleFile(f: File) {
+    currentFile = f
+    errorMsg.style.display = 'none'
+    outputArea.style.display = 'none'
+    downloadBtn.style.display = 'none'
+    resultData = null
+    previewImage.src = URL.createObjectURL(f)
+    previewContainer.style.display = ''
+    convertBtn.disabled = false
+  }
+
+  dropzone.addEventListener('click', () => fileInput.click())
+  dropzone.addEventListener('dragover', (e) => {
+    e.preventDefault()
+    dropzone.classList.add('dragover')
+  })
+  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'))
+  dropzone.addEventListener('drop', (e) => {
+    e.preventDefault()
+    dropzone.classList.remove('dragover')
+    const f = (e as DragEvent).dataTransfer?.files[0]
+    if (f) handleFile(f)
+  })
+  fileInput.addEventListener('change', () => {
+    const f = fileInput.files?.[0]
+    if (f) handleFile(f)
+    fileInput.value = ''
+  })
+
+  convertBtn.addEventListener('click', async () => {
+    if (!currentFile) return
+    convertBtn.disabled = true
+    convertBtn.innerHTML = '<span class="loading-spinner"></span> Convert'
+    errorMsg.style.display = 'none'
+    outputArea.style.display = 'none'
+    downloadBtn.style.display = 'none'
+
+    try {
+      await ensureInit()
+      const { imageToBin, imageToC } = getModule()
+      const input = Buffer.from(await currentFile.arrayBuffer())
+      const options: any = {
+        cf: cfSelect.value,
+        compress: compressSelect.value,
+        align: parseInt(alignInput.value) || 1,
+        premultiply: premultiplyCheck.checked,
+        rgb565Dither: ditherCheck.checked,
+      }
+
+      if (outputMode.value === 'bin') {
+        const bin = imageToBin(input, options)
+        resultData = toArrayBuffer(bin)
+        outputStats.textContent = `${(resultData.byteLength / 1024).toFixed(2)} KB`
+        outputBinMsg.style.display = ''
+        outputCode.style.display = 'none'
+      } else {
+        const cSource = imageToC(input, currentFile.name, null, options)
+        resultData = toArrayBuffer(new TextEncoder().encode(cSource))
+        outputStats.textContent = `${(resultData.byteLength / 1024).toFixed(2)} KB`
+        outputCode.textContent = cSource
+        outputCode.style.display = ''
+        outputBinMsg.style.display = 'none'
+      }
+      outputArea.style.display = ''
+      downloadBtn.style.display = ''
+    } catch (e: any) {
+      errorMsg.textContent = e?.message || String(e)
+      errorMsg.style.display = ''
+    } finally {
+      convertBtn.disabled = false
+      convertBtn.textContent = 'Convert'
+    }
+  })
+
+  downloadBtn.addEventListener('click', () => {
+    if (!resultData || !currentFile) return
+    const ext = outputMode.value === 'bin' ? '.bin' : '.c'
+    const baseName = currentFile.name.replace(/\.[^.]+$/, '') || 'output'
+    const blob = new Blob([resultData], { type: 'application/octet-stream' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = baseName + ext
+    a.click()
+    URL.revokeObjectURL(url)
+  })
+</script>

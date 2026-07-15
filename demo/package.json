@@ -1,33 +1,33 @@
 {
   "name": "img2lv-demo",
   "version": "0.0.0",
-  "description": "Web demo for img2lv",
+  "description": "Web demo & docs for img2lv",
   "type": "module",
   "scripts": {
-    "start": "vite",
-    "dev": "vite",
-    "build": "vite build",
-    "serve": "vite preview",
-    "preview": "vite preview",
+    "dev": "astro dev",
+    "build": "pnpm docs:gen && astro build",
+    "preview": "astro preview",
+    "docs:gen": "node scripts/generate-docs.mjs",
     "format": "prettier . -w",
-    "lint": "oxlint ."
+    "lint": "oxlint .",
+    "check": "astro check"
   },
   "license": "Apache-2.0",
   "devDependencies": {
+    "@types/node": "^26.1.1",
+    "astro": "^7.0.9",
     "oxlint": "^1.73.0",
-    "prettier": "^3.9.4",
-    "typescript": "^6.0.3",
-    "vite": "^8.1.3",
-    "vite-plugin-solid": "^2.11.8"
+    "prettier": "^3.9.5",
+    "prettier-plugin-astro": "^0.14.1",
+    "typedoc": "^0.28.20",
+    "typedoc-plugin-markdown": "^4.12.0",
+    "typescript": "^6.0.3"
   },
   "dependencies": {
-    "@solidjs/router": "^0.16.1",
+    "@astrojs/check": "^0.9.9",
     "buffer": "^6.0.3",
-    "highlight.js": "^11.11.1",
-    "img2lv": "^0.2.0",
-    "marked": "^18.0.5",
-    "marked-highlight": "^2.2.4",
-    "solid-js": "^1.9.5"
+    "img2lv": "^0.2.1",
+    "marked": "^18.0.6"
   },
   "packageManager": "pnpm@11.9.0",
   "prettier": {
@@ -35,6 +35,17 @@
     "semi": false,
     "trailingComma": "all",
     "singleQuote": true,
-    "arrowParens": "always"
+    "arrowParens": "always",
+    "plugins": [
+      "prettier-plugin-astro"
+    ],
+    "overrides": [
+      {
+        "files": "*.astro",
+        "options": {
+          "parser": "astro"
+        }
+      }
+    ]
   }
 }

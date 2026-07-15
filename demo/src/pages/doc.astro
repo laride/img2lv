@@ -1,0 +1,39 @@
+---
+import Base from '../layouts/Base.astro'
+import { marked } from 'marked'
+
+const modules = import.meta.glob('../generated/**/*.md', { query: '?raw', import: 'default', eager: true })
+
+const entries = Object.entries(modules).sort(([a], [b]) => {
+  const order = ['README', 'index', 'enumerations', 'interfaces', 'functions']
+  const rank = (p: string) => {
+    const idx = order.findIndex((k) => p.includes(k))
+    return idx === -1 ? 99 : idx
+  }
+  return rank(a) - rank(b)
+})
+
+const htmlParts = await Promise.all(entries.map(async ([, content]) => marked.parse(content as string)))
+const html = htmlParts.join('')
+---
+
+<Base
+  title="API Documentation | img2lv"
+  description="img2lv TypeScript API reference — functions, interfaces, and enums."
+>
+  <div class="page-header">
+    <h1 class="page-title">API Documentation</h1>
+    <p class="page-desc">
+      Auto-generated from <code>img2lv</code> TypeScript definitions.
+    </p>
+  </div>
+  {
+    html ? (
+      <div class="markdown-body" set:html={html} />
+    ) : (
+      <p>
+        Documentation not generated. Run <code>pnpm docs:gen</code> first.
+      </p>
+    )
+  }
+</Base>

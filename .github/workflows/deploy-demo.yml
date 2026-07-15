@@ -48,11 +48,11 @@ jobs:
         run: pnpm install --frozen-lockfile
         working-directory: demo
 
-      - name: Build demo
+      - name: Build demo (includes doc generation)
         run: pnpm build
         working-directory: demo
 
-      - name: Copy index.html
+      - name: Copy 404 fallback
         run: cp demo/dist/index.html demo/dist/404.html
 
       - name: Upload Pages artifact

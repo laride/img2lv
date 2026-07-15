@@ -1,0 +1,14 @@
+---
+import Base from '../layouts/Base.astro'
+import { marked } from 'marked'
+import readme from '../README.md?raw'
+
+const html = await marked.parse(readme)
+---
+
+<Base
+  title="img2lv — LVGL Image Converter"
+  description="Convert images to and from LVGL v9 format. Node.js / browser library powered by Rust + WASM."
+>
+  <div class="markdown-body" set:html={html} />
+</Base>

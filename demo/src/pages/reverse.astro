@@ -1,0 +1,144 @@
+---
+import Base from '../layouts/Base.astro'
+---
+
+<Base title="LVGL → PNG | img2lv" description="Convert LVGL v9 binary data back to a standard PNG image.">
+  <div class="page-header">
+    <h1 class="page-title">LVGL v9 Image Format → PNG</h1>
+    <p class="page-desc">Convert LVGL v9 binary data back to a standard PNG image.</p>
+  </div>
+
+  <div class="card">
+    <div class="dropzone" id="dropzone">
+      <input type="file" accept=".bin,.lvgl" id="file-input" style="display:none" />
+      <p class="dropzone-text">
+        <strong>Click to browse</strong> or drag and drop<br />
+        <span style="font-size:0.85rem;margin-top:0.25rem;display:inline-block">LVGL binary file (.bin)</span>
+      </p>
+    </div>
+    <div id="file-info" style="display:none;margin-top:1rem;font-size:0.9rem;color:var(--text-secondary)">
+      Selected: <strong id="file-name"></strong> (<span id="file-size"></span>)
+    </div>
+  </div>
+
+  <div style="margin-top:1.25rem;display:flex;gap:0.75rem">
+    <button class="btn btn-primary" id="convert-btn" disabled>Convert</button>
+    <button class="btn btn-secondary" id="download-btn" style="display:none">Download PNG</button>
+  </div>
+
+  <div class="status-msg error" id="error-msg" style="display:none"></div>
+
+  <div class="output-area" id="output-area" style="display:none">
+    <div class="output-header">
+      <span class="output-title">Result</span>
+      <span class="output-stats" id="output-stats"></span>
+    </div>
+    <div class="preview-container">
+      <img id="result-image" alt="Converted PNG" class="preview-image" />
+    </div>
+  </div>
+</Base>
+
+<script>
+  import { Buffer } from 'buffer'
+  ;(globalThis as any).Buffer = Buffer
+  import { ensureInit, getModule } from '../lib/img2lv'
+
+  const dropzone = document.getElementById('dropzone')!
+  const fileInput = document.getElementById('file-input') as HTMLInputElement
+  const fileInfo = document.getElementById('file-info')!
+  const fileName = document.getElementById('file-name')!
+  const fileSize = document.getElementById('file-size')!
+  const convertBtn = document.getElementById('convert-btn') as HTMLButtonElement
+  const downloadBtn = document.getElementById('download-btn') as HTMLButtonElement
+  const errorMsg = document.getElementById('error-msg')!
+  const outputArea = document.getElementById('output-area')!
+  const outputStats = document.getElementById('output-stats')!
+  const resultImage = document.getElementById('result-image') as HTMLImageElement
+
+  let currentFile: File | null = null
+  let resultUrl: string | null = null
+
+  function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+    const copy = new Uint8Array(bytes.byteLength)
+    copy.set(bytes)
+    return copy.buffer as ArrayBuffer
+  }
+
+  function handleFile(f: File) {
+    currentFile = f
+    errorMsg.style.display = 'none'
+    outputArea.style.display = 'none'
+    downloadBtn.style.display = 'none'
+    if (resultUrl) {
+      URL.revokeObjectURL(resultUrl)
+      resultUrl = null
+    }
+    fileName.textContent = f.name
+    fileSize.textContent = `${(f.size / 1024).toFixed(2)} KB`
+    fileInfo.style.display = ''
+    convertBtn.disabled = false
+  }
+
+  dropzone.addEventListener('click', () => fileInput.click())
+  dropzone.addEventListener('dragover', (e) => {
+    e.preventDefault()
+    dropzone.classList.add('dragover')
+  })
+  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'))
+  dropzone.addEventListener('drop', (e) => {
+    e.preventDefault()
+    dropzone.classList.remove('dragover')
+    const f = (e as DragEvent).dataTransfer?.files[0]
+    if (f) handleFile(f)
+  })
+  fileInput.addEventListener('change', () => {
+    const f = fileInput.files?.[0]
+    if (f) handleFile(f)
+    fileInput.value = ''
+  })
+
+  convertBtn.addEventListener('click', async () => {
+    if (!currentFile) return
+    convertBtn.disabled = true
+    convertBtn.innerHTML = '<span class="loading-spinner"></span> Convert'
+    errorMsg.style.display = 'none'
+    outputArea.style.display = 'none'
+    downloadBtn.style.display = 'none'
+
+    try {
+      await ensureInit()
+      const { lvglToPng, lvglWidth, lvglHeight } = getModule()
+      const input = Buffer.from(await currentFile.arrayBuffer())
+
+      const width = lvglWidth(input)
+      const height = lvglHeight(input)
+      const pngBuf = lvglToPng(input)
+      const pngData = toArrayBuffer(pngBuf)
+
+      const blob = new Blob([pngData], { type: 'image/png' })
+      if (resultUrl) URL.revokeObjectURL(resultUrl)
+      resultUrl = URL.createObjectURL(blob)
+
+      resultImage.src = resultUrl
+      outputStats.textContent = `${width}×${height} · ${(pngData.byteLength / 1024).toFixed(2)} KB`
+      outputArea.style.display = ''
+      downloadBtn.style.display = ''
+    } catch (e: any) {
+      errorMsg.textContent = e?.message || String(e)
+      errorMsg.style.display = ''
+    } finally {
+      convertBtn.disabled = false
+      convertBtn.textContent = 'Convert'
+    }
+  })
+
+  downloadBtn.addEventListener('click', () => {
+    if (!resultUrl || !currentFile) return
+    const baseName = currentFile.name.replace(/\.[^.]+$/, '') || 'output'
+    const a = document.createElement('a')
+    a.href = resultUrl
+    a.download = baseName + '.png'
+    a.click()
+  })
+</script>
